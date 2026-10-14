@@ -1,0 +1,7 @@
+ALTER TABLE gym."Member"
+  ADD COLUMN IF NOT EXISTS "dni" VARCHAR(8),
+  ADD COLUMN IF NOT EXISTS "address" VARCHAR(200);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "Member_dni_key"
+  ON gym."Member" ("dni")
+  WHERE "dni" IS NOT NULL;
