@@ -164,3 +164,44 @@ export async function sendRegistrationVerificationEmail({ member, verificationUr
 
   await transporter.sendMail(buildRegistrationVerificationEmail({ member, verificationUrl }));
 }
+
+export function buildPasswordResetEmail({ member, code }) {
+  const safeName = escapeHtml(member.firstName);
+  return {
+    from: process.env.SMTP_FROM,
+    to: member.email,
+    subject: "Tu código para recuperar la contraseña de IRONCORE",
+    text: [
+      `Hola, ${member.firstName}.`,
+      "",
+      `Tu código para crear una nueva contraseña es: ${code}`,
+      "",
+      "El código vence en 15 minutos y solo se puede usar una vez. Si no lo solicitaste, ignora este correo: tu contraseña no cambió.",
+      "",
+      "El equipo de IRONCORE Gym Club",
+    ].join("\n"),
+    html: `
+      <main style="max-width:600px;margin:0 auto;padding:32px;color:#20242c;font-family:Arial,sans-serif;line-height:1.6">
+        <h1 style="color:#0b0b0c">Recupera tu contraseña</h1>
+        <p>Hola ${safeName}, usa este código para crear una nueva contraseña:</p>
+        <p style="margin:28px 0;font-size:34px;font-weight:bold;letter-spacing:8px;background:#e4ff1a;color:#0b0b0c;display:inline-block;padding:12px 22px;border-radius:8px">${escapeHtml(code)}</p>
+        <p>El código vence en 15 minutos y solo se puede usar una vez. Si no lo solicitaste, ignora este correo: tu contraseña no cambió.</p>
+        <p>El equipo de IRONCORE Gym Club</p>
+      </main>
+    `,
+  };
+}
+
+export async function sendPasswordResetEmail({ member, code }) {
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT),
+    secure: process.env.SMTP_SECURE === "true",
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASSWORD,
+    },
+  });
+
+  await transporter.sendMail(buildPasswordResetEmail({ member, code }));
+}

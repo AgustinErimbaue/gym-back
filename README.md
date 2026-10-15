@@ -208,6 +208,45 @@ administra las recetas con `GET|POST /api/admin/recipes` y
 HTTPS. Usa recetas propias o con licencia; los valores nutricionales son
 orientativos.
 
+### Recuperar contraseña
+
+`POST /api/public/password-reset/request` (`{ email }`) responde siempre lo
+mismo y, si la cuenta existe, envía un código de 6 dígitos por correo (vence en
+15 minutos, máximo 5 intentos, límite por IP y por correo).
+`POST /api/public/password-reset/confirm` (`{ email, code, password }`) cambia la
+contraseña. Fuera de producción, si el correo termina en `.invalid` o no hay
+SMTP, el código se imprime en la consola del backend. Las sesiones ya abiertas
+no se cierran al cambiar la contraseña.
+
+### Progreso
+
+Con sesión de socio: `GET /api/progress` (medidas y marcas por ejercicio
+calculadas desde los entrenamientos), `POST /api/progress/measurements` (una
+medición por día; peso obligatorio) y `DELETE /api/progress/measurements/:id`.
+
+### Clases
+
+Con sesión de socio: `GET /api/classes` (próximos 14 días),
+`POST|DELETE /api/classes/:id/book` (exige membresía vigente, cupo y que la clase
+no haya empezado). El panel administra con `GET|POST /api/admin/classes`,
+`PUT|DELETE /api/admin/classes/:id` y `POST /api/admin/classes/:id/cancel`
+(avisa por push a quienes reservaron).
+
+### Avisos automáticos
+
+Cada 5 minutos, entre las 9 y las 20 h de Argentina, se envían por push: membresía
+por vencer (3 y 1 días), recordatorio de volver a entrenar (5 días sin asistir,
+una vez por semana) y clase en menos de una hora. `NotificationLog` evita
+repeticiones. Desactívalo con `REMINDERS_ENABLED=false`.
+
+### Chat en tiempo casi real
+
+`GET /api/community/messages/:memberId?afterId=N&wait=20` mantiene la consulta
+abierta hasta 25 s y responde apenas llega un mensaje nuevo.
+
+Aplica `migrations/20261016-create-progress-classes-reminders.sql` (o deja que
+`sequelize.sync()` cree las tablas al arrancar).
+
 ### Ejemplos
 
 Crear un socio:

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import app from "./app.js";
 import { sequelize } from "./models/index.js";
+import { startReminderScheduler } from "./services/reminders.js";
 
 const port = Number(process.env.PORT ?? 3000);
 
@@ -17,6 +18,7 @@ try {
   app.listen(port, () => {
     console.log(`API del gimnasio disponible en http://localhost:${port}`);
   });
+  startReminderScheduler();
 } catch (error) {
   console.error("No se pudo iniciar la API o conectar con PostgreSQL:", error);
   process.exitCode = 1;

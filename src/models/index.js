@@ -537,6 +537,82 @@ export const CommunityMessage = sequelize.define(
   },
 );
 
+export const PasswordResetCode = sequelize.define(
+  "PasswordResetCode",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    memberId: { type: DataTypes.INTEGER, allowNull: false, field: "member_id" },
+    codeHash: { type: DataTypes.STRING(64), allowNull: false, field: "code_hash" },
+    expiresAt: { type: DataTypes.DATE, allowNull: false, field: "expires_at" },
+    attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+  },
+  { indexes: [{ fields: ["member_id"] }] },
+);
+
+export const BodyMeasurement = sequelize.define(
+  "BodyMeasurement",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    memberId: { type: DataTypes.INTEGER, allowNull: false, field: "member_id" },
+    measuredOn: { type: DataTypes.DATEONLY, allowNull: false, field: "measured_on" },
+    weightKg: { type: DataTypes.DECIMAL(5, 2), allowNull: false, field: "weight_kg" },
+    bodyFatPercent: { type: DataTypes.DECIMAL(4, 1), allowNull: true, field: "body_fat_percent" },
+    waistCm: { type: DataTypes.DECIMAL(5, 1), allowNull: true, field: "waist_cm" },
+    chestCm: { type: DataTypes.DECIMAL(5, 1), allowNull: true, field: "chest_cm" },
+    hipsCm: { type: DataTypes.DECIMAL(5, 1), allowNull: true, field: "hips_cm" },
+    armCm: { type: DataTypes.DECIMAL(4, 1), allowNull: true, field: "arm_cm" },
+  },
+  { indexes: [{ unique: true, fields: ["member_id", "measured_on"] }] },
+);
+
+export const GymClass = sequelize.define(
+  "GymClass",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    name: { type: DataTypes.STRING(80), allowNull: false },
+    description: { type: DataTypes.STRING(400), allowNull: false, defaultValue: "" },
+    instructor: { type: DataTypes.STRING(80), allowNull: false, defaultValue: "" },
+    startsAt: { type: DataTypes.DATE, allowNull: false, field: "starts_at" },
+    durationMinutes: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 60, field: "duration_minutes" },
+    capacity: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 15 },
+    isCancelled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false, field: "is_cancelled" },
+  },
+  { indexes: [{ fields: ["starts_at"] }] },
+);
+
+export const ClassBooking = sequelize.define(
+  "ClassBooking",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    classId: { type: DataTypes.INTEGER, allowNull: false, field: "class_id" },
+    memberId: { type: DataTypes.INTEGER, allowNull: false, field: "member_id" },
+  },
+  {
+    indexes: [
+      { unique: true, fields: ["class_id", "member_id"] },
+      { fields: ["member_id"] },
+    ],
+  },
+);
+
+export const NotificationLog = sequelize.define(
+  "NotificationLog",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    memberId: { type: DataTypes.INTEGER, allowNull: false, field: "member_id" },
+    kind: { type: DataTypes.STRING(40), allowNull: false },
+    refKey: { type: DataTypes.STRING(80), allowNull: false, field: "ref_key" },
+  },
+  { indexes: [{ unique: true, fields: ["member_id", "kind", "ref_key"] }] },
+);
+
+PasswordResetCode.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "CASCADE" });
+BodyMeasurement.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "CASCADE" });
+ClassBooking.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "CASCADE" });
+ClassBooking.belongsTo(GymClass, { foreignKey: { name: "classId", field: "class_id" }, onDelete: "CASCADE" });
+GymClass.hasMany(ClassBooking, { foreignKey: { name: "classId", field: "class_id" }, onDelete: "CASCADE" });
+NotificationLog.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "CASCADE" });
+
 CommunityProfile.belongsTo(Member, {
   foreignKey: { name: "memberId", field: "member_id" },
   onDelete: "RESTRICT",

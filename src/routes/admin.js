@@ -8,6 +8,8 @@ import {
   BillingPayment,
   BillingSubscription,
   CommunityReport,
+  ClassBooking,
+  GymClass,
   Member,
   Membership,
   Plan,
@@ -38,7 +40,8 @@ import {
   hashAccessPassToken,
   isAccessPassUsable,
 } from "../services/accessPass.js";
-import { sendPromotionalPush } from "../services/pushNotifications.js";
+import { sendPromotionalPush, sendPushToMember } from "../services/pushNotifications.js";
+import { buildClassValues, classFields, countBookings, serializeClass } from "../services/classes.js";
 
 const router = Router();
 const loginAttempts = new Map();
@@ -1278,6 +1281,96 @@ router.delete("/recipes/:id", param("id").isInt({ min: 1 }), validateRequest, as
   try {
     const deleted = await Recipe.destroy({ where: { id: req.params.id } });
     if (!deleted) return res.status(404).json({ error: "No se encontró la receta." });
+    return res.status(204).end();
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get(
+  "/classes",
+  async (req, res, next) => {
+    try {
+      const classes = await GymClass.findAll({
+        where: { startsAt: { [Op.gte]: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        order: [["startsAt", "ASC"], ["id", "ASC"]],
+        limit: 200,
+      });
+      const counts = await countBookings(ClassBooking, classes.map(({ id }) => id));
+      res.json(classes.map((gymClass) => serializeClass(gymClass, { booked: counts.get(gymClass.id) ?? 0 })));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.post("/classes", classFields, validateRequest, async (req, res, next) => {
+  try {
+    const values = buildClassValues(req.body);
+    if (values.startsAt <= new Date()) {
+      return res.status(400).json({ error: "La clase debe empezar en el futuro." });
+    }
+    const gymClass = await GymClass.create(values);
+    return res.status(201).json(serializeClass(gymClass));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.put(
+  "/classes/:id",
+  [param("id").isInt({ min: 1 }), ...classFields],
+  validateRequest,
+  async (req, res, next) => {
+    try {
+      const gymClass = await GymClass.findByPk(req.params.id);
+      if (!gymClass) return res.status(404).json({ error: "No se encontró la clase." });
+      const values = buildClassValues(req.body);
+      const booked = await ClassBooking.count({ where: { classId: gymClass.id } });
+      if (values.capacity < booked) {
+        return res.status(400).json({ error: `Ya hay ${booked} reservas; el cupo no puede ser menor.` });
+      }
+      await gymClass.update(values);
+      return res.json(serializeClass(gymClass, { booked }));
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+router.post(
+  "/classes/:id/cancel",
+  param("id").isInt({ min: 1 }),
+  validateRequest,
+  async (req, res, next) => {
+    try {
+      const gymClass = await GymClass.findByPk(req.params.id);
+      if (!gymClass) return res.status(404).json({ error: "No se encontró la clase." });
+      if (!gymClass.isCancelled) {
+        await gymClass.update({ isCancelled: true });
+        const bookings = await ClassBooking.findAll({
+          where: { classId: gymClass.id },
+          attributes: ["memberId"],
+        });
+        for (const { memberId } of bookings) {
+          void sendPushToMember(memberId, {
+            title: "Clase cancelada",
+            body: `Se canceló la clase ${gymClass.name}.`,
+            data: { type: "class-reminder" },
+          }).catch((error) => console.error("No se pudo avisar la cancelación:", error.message));
+        }
+      }
+      return res.json(serializeClass(gymClass));
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+router.delete("/classes/:id", param("id").isInt({ min: 1 }), validateRequest, async (req, res, next) => {
+  try {
+    const deleted = await GymClass.destroy({ where: { id: req.params.id } });
+    if (!deleted) return res.status(404).json({ error: "No se encontró la clase." });
     return res.status(204).end();
   } catch (error) {
     return next(error);

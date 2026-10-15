@@ -12,6 +12,7 @@ import {
 import { requireMemberSession } from "../middleware/requireMemberSession.js";
 import { validateRequest } from "../middleware/validate.js";
 import { memberPhotoUrl } from "../services/memberProfilePhoto.js";
+import { notifyNewMessage, waitForNewMessage } from "../services/messageBus.js";
 import { sendPushToMember } from "../services/pushNotifications.js";
 
 const router = Router();
@@ -469,6 +470,7 @@ router.get(
   [
     param("memberId").isInt({ min: 1 }).toInt(),
     query("afterId").optional().isInt({ min: 0 }).toInt(),
+    query("wait").optional().isInt({ min: 0, max: 25 }).toInt(),
   ],
   validateRequest,
   asyncRoute(async (req, res) => {
@@ -487,11 +489,25 @@ router.get(
       ],
       ...(req.query.afterId === undefined ? {} : { id: { [Op.gt]: req.query.afterId } }),
     };
-    const messages = await CommunityMessage.findAll({
-      where,
-      order: [["id", req.query.afterId === undefined ? "DESC" : "ASC"]],
-      limit: req.query.afterId === undefined ? 50 : 100,
+    const waitMs = req.query.afterId === undefined ? 0 : (req.query.wait || 0) * 1000;
+    const deadline = Date.now() + waitMs;
+    let closed = false;
+    res.on("close", () => {
+      closed = true;
     });
+    let messages;
+    for (;;) {
+      messages = await CommunityMessage.findAll({
+        where,
+        order: [["id", req.query.afterId === undefined ? "DESC" : "ASC"]],
+        limit: req.query.afterId === undefined ? 50 : 100,
+      });
+      const remaining = deadline - Date.now();
+      if (messages.length || remaining <= 0 || closed) break;
+      // El aviso en memoria despierta al instante; el tope de 1 s cubre otros orígenes.
+      await waitForNewMessage(req.member.id, Math.min(1000, remaining));
+    }
+    if (closed) return undefined;
     if (req.query.afterId === undefined) messages.reverse();
     return res.json({
       messages: messages.map((message) => ({
@@ -526,6 +542,7 @@ router.post(
       recipientId: friendId,
       body: req.body.body,
     });
+    notifyNewMessage(friendId);
     const sender = await Member.findByPk(req.member.id, {
       attributes: ["firstName"],
     });
