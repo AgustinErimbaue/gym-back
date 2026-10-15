@@ -4,8 +4,10 @@ import { Router } from "express";
 import { body, param, query } from "express-validator";
 import {
   Attendance,
+  AccessPass,
   BillingPayment,
   BillingSubscription,
+  CommunityReport,
   Member,
   Membership,
   Plan,
@@ -30,6 +32,10 @@ import {
   setAdminSession,
   sessionDurationSeconds,
 } from "../middleware/requireAdminSession.js";
+import {
+  hashAccessPassToken,
+  isAccessPassUsable,
+} from "../services/accessPass.js";
 
 const router = Router();
 const loginAttempts = new Map();
@@ -459,6 +465,93 @@ router.use((req, res, next) => {
   }
   return next();
 });
+
+router.post(
+  "/access-qr/check-in",
+  [body("token").isString().matches(/^[A-Za-z0-9_-]{43}$/)],
+  validateRequest,
+  async (req, res, next) => {
+    try {
+      const tokenHash = hashAccessPassToken(req.body.token);
+      const result = await sequelize.transaction(async (transaction) => {
+        const candidate = await AccessPass.findOne({
+          where: { tokenHash },
+          attributes: ["memberId"],
+          transaction,
+        });
+        if (!candidate) return { status: 404, error: "El QR no es válido o ya fue utilizado." };
+
+        const member = await Member.findByPk(candidate.memberId, {
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
+        if (!member || member.status !== "active") {
+          return { status: 403, error: "El socio no tiene una cuenta activa." };
+        }
+
+        const accessPass = await AccessPass.findOne({
+          where: { tokenHash, memberId: member.id },
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
+        if (!accessPass || !isAccessPassUsable(accessPass)) {
+          return { status: 410, error: "El QR venció o ya fue utilizado. Genera uno nuevo desde la app." };
+        }
+
+        const today = getArgentinaDate();
+        const membership = await Membership.findOne({
+          where: {
+            memberId: member.id,
+            status: "active",
+            startDate: { [Op.lte]: today },
+            endDate: { [Op.gte]: today },
+          },
+          transaction,
+        });
+        if (!membership) {
+          return { status: 403, error: "El socio no tiene una membresía vigente." };
+        }
+
+        const checkedInAt = new Date();
+        if (!isAccessPassUsable(accessPass, checkedInAt.getTime())) {
+          return { status: 410, error: "El QR venció. Genera uno nuevo desde la app." };
+        }
+
+        const openAttendance = await Attendance.findOne({
+          where: { memberId: member.id, checkedOutAt: null },
+          transaction,
+        });
+        if (openAttendance) {
+          return { status: 409, error: "El socio ya tiene un ingreso abierto." };
+        }
+
+        await accessPass.update({ usedAt: checkedInAt }, { transaction });
+        const attendance = await Attendance.create(
+          { memberId: member.id, checkedInAt },
+          { transaction },
+        );
+        return {
+          attendance: {
+            id: attendance.id,
+            checkedInAt: attendance.checkedInAt,
+          },
+          member: {
+            id: member.id,
+            firstName: member.firstName,
+            lastName: member.lastName,
+          },
+        };
+      });
+
+      if (result.error) {
+        return res.status(result.status).json({ error: result.error });
+      }
+      return res.status(201).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
 
 router.get("/billing/status", (req, res) => {
   res.json({
@@ -1118,6 +1211,44 @@ router.patch(
       res.json(plan);
     } catch (error) {
       next(error);
+    }
+  },
+);
+
+router.get(
+  "/community/reports",
+  [query("status").optional().isIn(["open", "reviewed", "resolved"])],
+  validateRequest,
+  async (req, res, next) => {
+    try {
+      const reports = await CommunityReport.findAll({
+        where: req.query.status ? { status: req.query.status } : {},
+        include: [
+          { model: Member, as: "reporter", attributes: ["firstName", "lastName"] },
+          { model: Member, as: "reportedMember", attributes: ["firstName", "lastName"] },
+        ],
+        order: [["createdAt", "DESC"]],
+        limit: 100,
+      });
+      return res.json(reports);
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+router.patch(
+  "/community/reports/:id/status",
+  [param("id").isInt({ min: 1 }), body("status").isIn(["open", "reviewed", "resolved"])],
+  validateRequest,
+  async (req, res, next) => {
+    try {
+      const report = await CommunityReport.findByPk(req.params.id);
+      if (!report) return res.status(404).json({ error: "No se encontró la denuncia." });
+      await report.update({ status: req.body.status });
+      return res.json({ id: report.id, status: report.status });
+    } catch (error) {
+      return next(error);
     }
   },
 );

@@ -6,6 +6,14 @@ export function isMercadoPagoConfigured() {
   return Boolean(process.env.MP_ACCESS_TOKEN && process.env.MP_WEBHOOK_SECRET);
 }
 
+export function isPaymentDemoMode() {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.MP_DEMO_MODE === "true" &&
+    !isMercadoPagoConfigured()
+  );
+}
+
 export function getGymPublicUrl() {
   const publicUrl = process.env.GYM_PUBLIC_URL ?? process.env.CORS_ORIGIN?.split(",")[0]?.trim();
   if (!publicUrl) {

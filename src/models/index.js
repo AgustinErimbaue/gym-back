@@ -23,6 +23,11 @@ export const Member = sequelize.define("Member", {
     unique: true,
     validate: { isEmail: true },
   },
+  passwordHash: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    field: "password_hash",
+  },
   dni: {
     type: DataTypes.STRING(8),
     allowNull: true,
@@ -40,6 +45,10 @@ export const Member = sequelize.define("Member", {
     type: DataTypes.ENUM("active", "inactive"),
     allowNull: false,
     defaultValue: "active",
+  },
+}, {
+  defaultScope: {
+    attributes: { exclude: ["passwordHash"] },
   },
 });
 
@@ -131,6 +140,73 @@ export const Attendance = sequelize.define("Attendance", {
     field: "checked_out_at",
   },
 });
+
+export const AccessPass = sequelize.define("AccessPass", {
+  id: {
+    type: DataTypes.INTEGER,
+    autoIncrement: true,
+    primaryKey: true,
+  },
+  tokenHash: {
+    type: DataTypes.STRING(64),
+    allowNull: false,
+    unique: true,
+    field: "token_hash",
+  },
+  expiresAt: {
+    type: DataTypes.DATE,
+    allowNull: false,
+    field: "expires_at",
+  },
+  usedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: "used_at",
+  },
+});
+
+export const Workout = sequelize.define(
+  "Workout",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    method: {
+      type: DataTypes.STRING(16),
+      allowNull: false,
+      validate: { isIn: [["heavyDuty", "weider"]] },
+    },
+    level: {
+      type: DataTypes.STRING(16),
+      allowNull: false,
+      validate: { isIn: [["Principiante", "Intermedio", "Experto"]] },
+    },
+    routineName: {
+      type: DataTypes.STRING(120),
+      allowNull: false,
+      field: "routine_name",
+    },
+    exercises: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+    },
+    feedback: {
+      type: DataTypes.STRING(1000),
+      allowNull: false,
+    },
+    performedAt: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+      field: "performed_at",
+    },
+  },
+  {
+    indexes: [{ fields: ["member_id", "performed_at"] }],
+  },
+);
 
 export const BillingSubscription = sequelize.define(
   "BillingSubscription",
@@ -236,6 +312,154 @@ export const BillingPayment = sequelize.define(
   },
 );
 
+export const CommunityProfile = sequelize.define("CommunityProfile", {
+  memberId: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    field: "member_id",
+  },
+  isVisible: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: "is_visible",
+  },
+  trainingLevel: {
+    type: DataTypes.STRING(20),
+    allowNull: true,
+    field: "training_level",
+    validate: { isIn: [["Principiante", "Intermedio", "Experto"]] },
+  },
+  goal: {
+    type: DataTypes.STRING(200),
+    allowNull: true,
+  },
+});
+
+export const CommunityConnection = sequelize.define(
+  "CommunityConnection",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    memberA: { type: DataTypes.INTEGER, allowNull: false, field: "member_a" },
+    memberB: { type: DataTypes.INTEGER, allowNull: false, field: "member_b" },
+    requestedBy: { type: DataTypes.INTEGER, allowNull: false, field: "requested_by" },
+    status: {
+      type: DataTypes.STRING(16),
+      allowNull: false,
+      defaultValue: "pending",
+      validate: { isIn: [["pending", "accepted"]] },
+    },
+  },
+  {
+    indexes: [
+      { unique: true, fields: ["member_a", "member_b"] },
+      { fields: ["member_a", "status"] },
+      { fields: ["member_b", "status"] },
+    ],
+  },
+);
+
+export const CommunityBlock = sequelize.define(
+  "CommunityBlock",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    blockedBy: { type: DataTypes.INTEGER, allowNull: false, field: "blocked_by" },
+    blockedMemberId: { type: DataTypes.INTEGER, allowNull: false, field: "blocked_member_id" },
+  },
+  {
+    indexes: [{ unique: true, fields: ["blocked_by", "blocked_member_id"] }],
+  },
+);
+
+export const CommunityReport = sequelize.define(
+  "CommunityReport",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    reporterId: { type: DataTypes.INTEGER, allowNull: false, field: "reporter_id" },
+    reportedMemberId: { type: DataTypes.INTEGER, allowNull: false, field: "reported_member_id" },
+    reason: {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+      validate: { isIn: [["inappropriate", "harassment", "fake_profile", "other"]] },
+    },
+    details: { type: DataTypes.STRING(500), allowNull: true },
+    status: {
+      type: DataTypes.STRING(16),
+      allowNull: false,
+      defaultValue: "open",
+      validate: { isIn: [["open", "reviewed", "resolved"]] },
+    },
+  },
+  {
+    indexes: [{ fields: ["status", "created_at"] }],
+  },
+);
+
+export const CommunityMessage = sequelize.define(
+  "CommunityMessage",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    senderId: { type: DataTypes.INTEGER, allowNull: false, field: "sender_id" },
+    recipientId: { type: DataTypes.INTEGER, allowNull: false, field: "recipient_id" },
+    body: { type: DataTypes.STRING(2000), allowNull: false },
+  },
+  {
+    indexes: [
+      { fields: ["sender_id", "recipient_id", "id"] },
+      { fields: ["recipient_id", "sender_id", "id"] },
+    ],
+  },
+);
+
+CommunityProfile.belongsTo(Member, {
+  foreignKey: { name: "memberId", field: "member_id" },
+  onDelete: "RESTRICT",
+});
+Member.hasOne(CommunityProfile, {
+  foreignKey: { name: "memberId", field: "member_id" },
+  onDelete: "RESTRICT",
+});
+CommunityConnection.belongsTo(Member, {
+  as: "memberAProfile",
+  foreignKey: { name: "memberA", field: "member_a" },
+  onDelete: "RESTRICT",
+});
+CommunityConnection.belongsTo(Member, {
+  as: "memberBProfile",
+  foreignKey: { name: "memberB", field: "member_b" },
+  onDelete: "RESTRICT",
+});
+CommunityBlock.belongsTo(Member, {
+  as: "blocker",
+  foreignKey: { name: "blockedBy", field: "blocked_by" },
+  onDelete: "RESTRICT",
+});
+CommunityBlock.belongsTo(Member, {
+  as: "blockedMember",
+  foreignKey: { name: "blockedMemberId", field: "blocked_member_id" },
+  onDelete: "RESTRICT",
+});
+CommunityReport.belongsTo(Member, {
+  as: "reporter",
+  foreignKey: { name: "reporterId", field: "reporter_id" },
+  onDelete: "RESTRICT",
+});
+CommunityReport.belongsTo(Member, {
+  as: "reportedMember",
+  foreignKey: { name: "reportedMemberId", field: "reported_member_id" },
+  onDelete: "RESTRICT",
+});
+CommunityMessage.belongsTo(Member, {
+  as: "sender",
+  foreignKey: { name: "senderId", field: "sender_id" },
+  onDelete: "RESTRICT",
+});
+CommunityMessage.belongsTo(Member, {
+  as: "recipient",
+  foreignKey: { name: "recipientId", field: "recipient_id" },
+  onDelete: "RESTRICT",
+});
+
 Member.hasMany(Membership, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "RESTRICT" });
 Membership.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" } });
 Member.hasMany(RegistrationRequest, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "RESTRICT" });
@@ -246,6 +470,10 @@ Plan.hasMany(Membership, { foreignKey: { name: "planId", field: "plan_id" }, onD
 Membership.belongsTo(Plan, { foreignKey: { name: "planId", field: "plan_id" } });
 Member.hasMany(Attendance, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "RESTRICT" });
 Attendance.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" } });
+Member.hasMany(AccessPass, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "RESTRICT" });
+AccessPass.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" } });
+Member.hasMany(Workout, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "RESTRICT" });
+Workout.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" } });
 Member.hasMany(BillingSubscription, {
   foreignKey: { name: "memberId", field: "member_id" },
   onDelete: "RESTRICT",

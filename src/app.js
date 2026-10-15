@@ -7,6 +7,7 @@ import membersRouter from "./routes/members.js";
 import plansRouter from "./routes/plans.js";
 import publicRouter from "./routes/public.js";
 import adminRouter from "./routes/admin.js";
+import communityRouter from "./routes/community.js";
 import { errorHandler, notFound } from "./middleware/errorHandler.js";
 import { requireApiToken } from "./middleware/requireApiToken.js";
 
@@ -27,6 +28,7 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
 app.use("/api/public", publicRouter);
+app.use("/api/community", communityRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api", requireApiToken);
 app.use("/api/members", membersRouter);

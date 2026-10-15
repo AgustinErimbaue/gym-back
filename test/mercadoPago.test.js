@@ -5,6 +5,7 @@ import {
   createSubscriptionAuthorization,
   getArgentinaDate,
   getBillingPeriod,
+  isPaymentDemoMode,
   verifyMercadoPagoWebhook,
 } from "../src/services/mercadoPago.js";
 
@@ -58,6 +59,39 @@ test("verifica la firma HMAC de webhooks de Mercado Pago", () => {
   assert.equal(verifyMercadoPagoWebhook(headers), true);
   assert.equal(verifyMercadoPagoWebhook({ ...headers, dataId: "different-id" }), false);
   assert.equal(verifyMercadoPagoWebhook({ ...headers, signature: "v1=not-a-signature" }), false);
+});
+
+test("habilita el modo de pago ficticio solo fuera de producción y sin credenciales reales", () => {
+  const previous = {
+    nodeEnv: process.env.NODE_ENV,
+    demoMode: process.env.MP_DEMO_MODE,
+    token: process.env.MP_ACCESS_TOKEN,
+    webhookSecret: process.env.MP_WEBHOOK_SECRET,
+  };
+
+  try {
+    delete process.env.MP_ACCESS_TOKEN;
+    delete process.env.MP_WEBHOOK_SECRET;
+    process.env.MP_DEMO_MODE = "true";
+    process.env.NODE_ENV = "development";
+    assert.equal(isPaymentDemoMode(), true);
+    process.env.NODE_ENV = "production";
+    assert.equal(isPaymentDemoMode(), false);
+    process.env.NODE_ENV = "development";
+    process.env.MP_ACCESS_TOKEN = "TEST-token";
+    process.env.MP_WEBHOOK_SECRET = "webhook-test-secret";
+    assert.equal(isPaymentDemoMode(), false);
+  } finally {
+    for (const [key, value] of Object.entries({
+      NODE_ENV: previous.nodeEnv,
+      MP_DEMO_MODE: previous.demoMode,
+      MP_ACCESS_TOKEN: previous.token,
+      MP_WEBHOOK_SECRET: previous.webhookSecret,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test("crea una autorización recurrente con prorrateo y cobro el día 1", async () => {

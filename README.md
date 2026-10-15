@@ -23,6 +23,7 @@ membresías y asistencias.
    node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
    ```
 
+   Genera también un secreto aleatorio independiente para `MEMBER_SESSION_SECRET`.
 3. Define contraseñas únicas en `POSTGRES_PASSWORD` y `GYM_DB_PASSWORD`.
    `POSTGRES_PASSWORD` es para el usuario administrador de la base y `GYM_DB_PASSWORD`
    para el usuario limitado que usa la API. Pon la contraseña de `GYM_DB_PASSWORD`
@@ -46,20 +47,35 @@ El usuario de la API solo puede operar dentro del esquema `gym`.
 Al arrancar, Sequelize crea las tablas que todavía no existan. `sync()` no altera
 tablas existentes; los cambios de esquema posteriores deben gestionarse con
 migraciones antes de desplegar en producción.
-Para añadir DNI y domicilio a una base existente, ejecuta
-`migrations/20261014-add-member-dni-address.sql` antes de arrancar esta versión.
-Los dos campos son obligatorios para nuevas altas; los registros históricos
-pueden conservarlos vacíos. El DNI debe tener entre 7 y 8 dígitos y es único.
+En bases existentes, ejecuta las migraciones que falten antes de arrancar:
+`migrations/20261014-add-member-dni-address.sql` añade DNI y domicilio
+(obligatorios para nuevas altas; el DNI debe tener entre 7 y 8 dígitos y es
+único) y `migrations/20261014-add-member-password-hash.sql` agrega un campo
+opcional para hashes de contraseñas. Las migraciones conservan los registros
+existentes; quienes no tienen contraseña todavía no pueden iniciar sesión desde
+la app. `migrations/20261014-create-access-pass.sql` crea el almacenamiento de
+los QR de acceso de un solo uso y
+`migrations/20261014-create-workout-logs.sql` crea el historial de entrenamientos.
+`migrations/20261014-create-community.sql` crea perfiles sociales optativos,
+amistades, bloqueos, denuncias y mensajes privados.
 
 ## Endpoints
 
 Todas las rutas están bajo `/api`. Los errores se devuelven como JSON. Todas las
-rutas excepto `GET /api/health`, `GET /api/public/plans` y
-`POST /api/public/registrations` requieren el encabezado
+rutas excepto `GET /api/health`, `GET /api/public/plans`,
+`POST /api/public/registrations`, `POST /api/public/login`,
+`POST /api/public/checkin-qr`, `GET /api/public/workouts`,
+`POST /api/public/workouts`, `GET /api/public/billing`, `GET /api/public/me`
+y las rutas `/api/community/*`
+requieren el encabezado
 `Authorization: Bearer <API_TOKEN>`. El servidor no inicia si el token no está
 configurado o tiene menos de 32 bytes. No compartas el token ni lo guardes en el
-código fuente. En producción, sirve la API únicamente mediante HTTPS o una red
-privada.
+código fuente. `GET /api/public/me` requiere en cambio la sesión Bearer del
+`/public/me`, `/public/checkin-qr`, `/public/workouts` y `/public/billing`
+requieren una sesión de socio; todas las rutas `/api/community/*` también
+requieren sesión de socio; `/admin/access-qr/check-in` y las rutas de moderación
+requieren sesión administrativa.
+En producción, sirve la API únicamente mediante HTTPS o una red privada.
 
 | Recurso | Rutas |
 | --- | --- |
@@ -69,14 +85,65 @@ privada.
 | Membresías | `GET /memberships`, `GET /memberships/:id`, `POST /memberships`, `PATCH /memberships/:id/status`, `DELETE /memberships/:id` |
 | Asistencias | `GET /attendances?memberId=:id`, `POST /attendances`, `PATCH /attendances/:id/checkout` |
 | Web pública | `GET /public/plans`, `POST /public/registrations/checkout`, `POST /public/registrations` |
+| App de socios | `POST /public/login`, `GET /public/me`, `POST /public/checkin-qr`, `GET /public/workouts`, `POST /public/workouts`, `GET /public/billing` |
+| Comunidad | `GET/PUT /community/profile`, `GET /community/members`, `GET /community/requests`, `POST/DELETE /community/requests/:memberId`, `POST /community/requests/:memberId/accept`, `GET /community/friends`, `DELETE /community/friends/:memberId`, `GET /community/blocks`, `POST/DELETE /community/blocks/:memberId`, `POST /community/reports/:memberId`, `GET/POST /community/messages/:memberId` |
+| Check-in administrativo | `POST /admin/access-qr/check-in` (sesión administrativa) |
+| Moderación administrativa | `GET /admin/community/reports`, `PATCH /admin/community/reports/:id/status` (sesión administrativa) |
+
+La comunidad solo está disponible para socios activos. Los perfiles se mantienen
+ocultos hasta que cada socio habilita su visibilidad y completa su nivel y
+objetivo. En búsquedas solo se comparte el nombre de pila, el nivel y el
+objetivo; nunca se exponen correo, teléfono ni domicilio. Solo se puede iniciar
+un chat cuando ambas personas aceptaron la amistad; bloquear corta el chat y
+elimina la amistad. Las denuncias quedan guardadas para revisión en el panel
+administrativo. Los mensajes se consultan cada cuatro segundos mientras el chat
+está abierto; no se envían notificaciones cuando la app está cerrada.
+
+El registro desde la app envía una contraseña junto con los datos de inscripción
+a `POST /api/public/registrations`. Gym back guarda la contraseña con scrypt,
+crea una solicitud pendiente y devuelve una sesión firmada. Para iniciar sesión,
+la app utiliza `POST /api/public/login`; `GET /api/public/me` valida la sesión.
+Las sesiones duran siete días y los intentos de inicio de sesión están limitados.
+El nuevo campo `password_hash` es opcional para conservar los socios existentes;
+quienes no tengan una contraseña configurada no podrán iniciar sesión hasta que
+completen un flujo de alta con contraseña.
+
+La app genera un QR de acceso con `POST /api/public/checkin-qr`; se requiere
+una membresía vigente. Cada código vence en 60 segundos y la base de datos
+guarda únicamente su hash. El personal lo valida en
+`POST /api/admin/access-qr/check-in` con su sesión administrativa. La operación
+consume el código y registra la asistencia en una transacción; un código no se
+puede reutilizar.
+
+El historial usa `GET /api/public/workouts` y `POST /api/public/workouts`,
+protegidos por sesión de socio. Cada registro queda asociado a la cuenta
+autenticada e incluye método, nivel, ejercicios con peso y repeticiones,
+descripción y fecha. La API devuelve hasta los 20 registros más recientes.
+Ejecuta `migrations/20261014-create-workout-logs.sql` en bases existentes
+antes de desplegar esta función.
+
+La app consulta `GET /api/public/billing` con la sesión del socio. Devuelve los
+pagos de sus propias suscripciones clasificados por estado y las suscripciones
+pendientes que todavía no tengan pagos registrados. La información es un
+resumen de movimientos de Mercado Pago; no incluye un PDF ni reemplaza una
+factura fiscal.
 
 La web usa los endpoints públicos para mostrar planes activos y recibir
 solicitudes de inscripción y comenzar el checkout recurrente. `POST
 /api/public/registrations/checkout` crea un socio inactivo y una suscripción
-pendiente, y devuelve un enlace hospedado por Mercado Pago. El socio ingresa
-sus datos de pago allí; la aplicación no recibe datos de tarjeta. No se crea
-una membresía ni se habilita el acceso hasta que un webhook firmado confirma
-el pago aprobado.
+pendiente, y devuelve un enlace hospedado por Mercado Pago. Tras crear el
+checkout, la API envía al socio el correo de recepción de la solicitud usando
+SMTP con el enlace individual de autorización de Mercado Pago. Si el correo no
+se puede enviar, el checkout sigue disponible y la respuesta informa la
+advertencia. El socio ingresa sus datos de pago en Mercado Pago; la aplicación
+no recibe datos de tarjeta. No se crea una membresía ni se habilita el acceso
+hasta que un webhook firmado confirma el pago aprobado.
+
+Para previsualizar el correo localmente sin cobrar, configura
+`MP_DEMO_MODE=true` y deja las credenciales de Mercado Pago vacías. El correo
+incluye un enlace ficticio bajo `.invalid`; el endpoint no abre el checkout ni
+guarda una inscripción de demostración. Este modo se ignora siempre cuando
+`NODE_ENV=production`.
 
 Las personas que ya enviaron una solicitud manual (`POST
 /api/public/registrations`) pueden recibir su enlace desde **Solicitudes web**
@@ -143,13 +210,15 @@ Registrar una asistencia requiere un socio activo y una membresía vigente:
 - `NODE_ENV`: entorno de ejecución
 - `ADMIN_EMAIL`, `ADMIN_PASSWORD`: credenciales de la única cuenta administradora. Usa una contraseña aleatoria de al menos 16 caracteres y guarda el archivo `.env` fuera del repositorio.
 - `ADMIN_SESSION_SECRET`: secreto aleatorio de al menos 32 bytes para firmar sesiones del panel.
+- `MEMBER_SESSION_SECRET`: secreto aleatorio independiente de al menos 32 bytes para firmar sesiones de socios.
 - `API_TOKEN`: secreto Bearer para acceder a las rutas de la API
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`: base de datos y credenciales administrativas usadas por Docker Compose
 - `GYM_DB_USER`, `GYM_DB_PASSWORD`: usuario de base de datos de privilegios limitados usado por la API y creado en la inicialización
 - `POSTGRES_PORT`: puerto local publicado para PostgreSQL (por defecto `5432`, solo accesible desde el equipo local)
 - `DATABASE_URL`: URL de conexión PostgreSQL
 - `CORS_ORIGIN`: orígenes permitidos separados por comas; si se omite, CORS queda desactivado
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`: servidor SMTP, puerto, conexión TLS, credenciales y remitente usados para los correos de solicitudes públicas. Usa `SMTP_SECURE=true` normalmente con el puerto 465 y `false` con 587.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`: servidor SMTP, puerto, conexión TLS, credenciales y remitente usados para los correos de solicitudes públicas, incluidas las inscripciones web que inician el checkout. Usa `SMTP_SECURE=true` normalmente con el puerto 465 y `false` con 587.
+- `MP_DEMO_MODE`: con valor `true`, permite probar el correo localmente con un enlace `.invalid` no funcional cuando las credenciales de Mercado Pago no están configuradas; no guarda registros y se desactiva automáticamente en producción.
 
 Configura estas variables en el `.env` del backend antes de aceptar solicitudes.
 La interfaz administrativa y la API deben servirse en el mismo sitio (por
