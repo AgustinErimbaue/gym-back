@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildRegistrationReceivedEmail,
+  buildRegistrationVerificationEmail,
   isReservedEmailAddress,
 } from "../src/services/welcomeEmail.js";
 
@@ -38,4 +39,21 @@ test("conserva el texto de pago seguro para enlaces reales", () => {
   assert.match(email.text, /enlace seguro de Mercado Pago/);
   assert.match(email.html, /Continuar al pago seguro/);
   assert.doesNotMatch(email.text, /enlace ficticio/);
+});
+
+test("escapa datos personales y mantiene el token de verificación solo en el enlace", () => {
+  const email = buildRegistrationVerificationEmail({
+    member: {
+      firstName: "<script>alert(1)</script>",
+      lastName: "Prueba",
+      email: "ana@example.com",
+    },
+    verificationUrl: "https://gym.example/#verify-registration=secret-token",
+  });
+
+  assert.match(email.html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(email.html, /<script>/);
+  assert.match(email.html, /href="https:\/\/gym\.example\/#verify-registration=secret-token"/);
+  assert.match(email.text, /secret-token/);
+  assert.equal(email.to, "ana@example.com");
 });

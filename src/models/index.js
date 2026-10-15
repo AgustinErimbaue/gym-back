@@ -28,6 +28,16 @@ export const Member = sequelize.define("Member", {
     allowNull: true,
     field: "password_hash",
   },
+  profilePhotoData: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    field: "profile_photo_data",
+  },
+  profilePhotoUpdatedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: "profile_photo_updated_at",
+  },
   dni: {
     type: DataTypes.STRING(8),
     allowNull: true,
@@ -48,9 +58,66 @@ export const Member = sequelize.define("Member", {
   },
 }, {
   defaultScope: {
-    attributes: { exclude: ["passwordHash"] },
+    attributes: { exclude: ["passwordHash", "profilePhotoData"] },
   },
 });
+
+export const MemberPushToken = sequelize.define(
+  "MemberPushToken",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    memberId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "member_id",
+    },
+    token: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+      unique: true,
+    },
+    platform: {
+      type: DataTypes.STRING(16),
+      allowNull: false,
+      validate: { isIn: [["ios", "android"]] },
+    },
+  },
+  {
+    indexes: [{ fields: ["member_id"] }],
+  },
+);
+
+export const Recipe = sequelize.define("Recipe", {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  title: { type: DataTypes.STRING(120), allowNull: false },
+  summary: { type: DataTypes.STRING(400), allowNull: false, defaultValue: "" },
+  imageUrl: { type: DataTypes.STRING(500), allowNull: true, field: "image_url" },
+  tags: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+  prepMinutes: { type: DataTypes.INTEGER, allowNull: false, field: "prep_minutes" },
+  servings: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+  calories: { type: DataTypes.INTEGER, allowNull: false },
+  proteinGrams: { type: DataTypes.INTEGER, allowNull: false, field: "protein_grams" },
+  carbsGrams: { type: DataTypes.INTEGER, allowNull: false, field: "carbs_grams" },
+  fatGrams: { type: DataTypes.INTEGER, allowNull: false, field: "fat_grams" },
+  ingredients: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+  steps: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+  isPublished: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, field: "is_published" },
+  isFeatured: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false, field: "is_featured" },
+});
+
+export const RecipeFavorite = sequelize.define(
+  "RecipeFavorite",
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    memberId: { type: DataTypes.INTEGER, allowNull: false, field: "member_id" },
+    recipeId: { type: DataTypes.INTEGER, allowNull: false, field: "recipe_id" },
+  },
+  { indexes: [{ unique: true, fields: ["member_id", "recipe_id"] }] },
+);
 
 export const Plan = sequelize.define("Plan", {
   id: {
@@ -107,6 +174,65 @@ export const Membership = sequelize.define("Membership", {
     allowNull: false,
     defaultValue: "active",
   },
+});
+
+export const PendingMemberRegistration = sequelize.define("PendingMemberRegistration", {
+  id: {
+    type: DataTypes.INTEGER,
+    autoIncrement: true,
+    primaryKey: true,
+  },
+  firstName: {
+    type: DataTypes.STRING(80),
+    allowNull: false,
+    field: "first_name",
+  },
+  lastName: {
+    type: DataTypes.STRING(80),
+    allowNull: false,
+    field: "last_name",
+  },
+  email: {
+    type: DataTypes.STRING(254),
+    allowNull: false,
+    unique: true,
+    validate: { isEmail: true },
+  },
+  dni: {
+    type: DataTypes.STRING(8),
+    allowNull: false,
+  },
+  address: {
+    type: DataTypes.STRING(200),
+    allowNull: false,
+  },
+  phone: {
+    type: DataTypes.STRING(30),
+    allowNull: true,
+  },
+  planId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    field: "plan_id",
+    references: { model: Plan, key: "id" },
+    onDelete: "RESTRICT",
+    onUpdate: "CASCADE",
+  },
+  tokenHash: {
+    type: DataTypes.STRING(64),
+    allowNull: false,
+    unique: true,
+    field: "token_hash",
+  },
+  expiresAt: {
+    type: DataTypes.DATE,
+    allowNull: false,
+    field: "expires_at",
+  },
+}, {
+  indexes: [
+    { fields: ["expires_at"] },
+  ],
 });
 
 export const RegistrationRequest = sequelize.define("RegistrationRequest", {
@@ -472,6 +598,12 @@ Member.hasMany(Attendance, { foreignKey: { name: "memberId", field: "member_id" 
 Attendance.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" } });
 Member.hasMany(AccessPass, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "RESTRICT" });
 AccessPass.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" } });
+Member.hasMany(MemberPushToken, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "CASCADE" });
+MemberPushToken.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "CASCADE" });
+Member.hasMany(RecipeFavorite, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "CASCADE" });
+RecipeFavorite.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "CASCADE" });
+Recipe.hasMany(RecipeFavorite, { foreignKey: { name: "recipeId", field: "recipe_id" }, onDelete: "CASCADE" });
+RecipeFavorite.belongsTo(Recipe, { foreignKey: { name: "recipeId", field: "recipe_id" }, onDelete: "CASCADE" });
 Member.hasMany(Workout, { foreignKey: { name: "memberId", field: "member_id" }, onDelete: "RESTRICT" });
 Workout.belongsTo(Member, { foreignKey: { name: "memberId", field: "member_id" } });
 Member.hasMany(BillingSubscription, {

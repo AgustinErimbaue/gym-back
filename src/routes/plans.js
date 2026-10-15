@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { body, param } from "express-validator";
+import { body, matchedData, param } from "express-validator";
 import { Plan } from "../models/index.js";
 import { validateRequest } from "../middleware/validate.js";
 
@@ -33,7 +33,7 @@ router.get("/:id", param("id").isInt({ min: 1 }), validateRequest, async (req, r
 
 router.post("/", planFields, validateRequest, async (req, res, next) => {
   try {
-    const plan = await Plan.create(req.body);
+    const plan = await Plan.create(matchedData(req, { locations: ["body"] }));
     res.status(201).json(plan);
   } catch (error) {
     next(error);
@@ -44,7 +44,7 @@ router.put("/:id", param("id").isInt({ min: 1 }), planFields, validateRequest, a
   try {
     const plan = await Plan.findByPk(req.params.id);
     if (!plan) return res.status(404).json({ error: "No se encontró el plan." });
-    await plan.update(req.body);
+    await plan.update(matchedData(req, { locations: ["body"] }));
     res.json(plan);
   } catch (error) {
     next(error);

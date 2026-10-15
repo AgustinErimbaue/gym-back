@@ -58,24 +58,41 @@ los QR de acceso de un solo uso y
 `migrations/20261014-create-workout-logs.sql` crea el historial de entrenamientos.
 `migrations/20261014-create-community.sql` crea perfiles sociales optativos,
 amistades, bloqueos, denuncias y mensajes privados.
+`migrations/20261015-add-member-profile-photo.sql` añade almacenamiento opcional
+para fotos JPEG de perfil. Se conservan optimizadas en PostgreSQL con un máximo
+de 350 KB; el acceso a cada foto requiere sesión de socio y, para ver la foto de
+otra persona, su perfil de Comunidad debe estar visible y ninguno debe haber
+bloqueado al otro.
+`migrations/20261015-create-pending-member-registrations.sql` crea el
+almacenamiento temporal de solicitudes que aún deben confirmar el correo.
+`migrations/20261015-create-member-push-tokens.sql` registra de forma privada
+los tokens push de los dispositivos que autorizaron las notificaciones.
 
 ## Endpoints
 
 Todas las rutas están bajo `/api`. Los errores se devuelven como JSON. Todas las
 rutas excepto `GET /api/health`, `GET /api/public/plans`,
-`POST /api/public/registrations`, `POST /api/public/login`,
+`POST /api/public/registrations`, `POST /api/public/registrations/verify`,
+`POST /api/public/login`,
 `POST /api/public/checkin-qr`, `GET /api/public/workouts`,
-`POST /api/public/workouts`, `GET /api/public/billing`, `GET /api/public/me`
-y las rutas `/api/community/*`
+`POST /api/public/workouts`, `GET /api/public/billing`,
+`GET/PUT /api/public/me`, `PUT /api/public/me/photo`,
+`GET /api/public/members/:memberId/photo`, `/api/notifications/*` y las rutas `/api/community/*`
 requieren el encabezado
 `Authorization: Bearer <API_TOKEN>`. El servidor no inicia si el token no está
 configurado o tiene menos de 32 bytes. No compartas el token ni lo guardes en el
 código fuente. `GET /api/public/me` requiere en cambio la sesión Bearer del
-`/public/me`, `/public/checkin-qr`, `/public/workouts` y `/public/billing`
-requieren una sesión de socio; todas las rutas `/api/community/*` también
+`/public/me` (GET/PUT), `/public/me/photo` (PUT),
+`/public/members/:memberId/photo` (GET), `/public/checkin-qr`,
+`/public/attendance-insights`, `/public/workouts`, `/public/billing`, todas las rutas `/api/community/*` y `/api/notifications/*`
 requieren sesión de socio; `/admin/access-qr/check-in` y las rutas de moderación
 requieren sesión administrativa.
 En producción, sirve la API únicamente mediante HTTPS o una red privada.
+
+`GET /api/public/attendance-insights` resume los ingresos registrados en las
+cuatro semanas completas anteriores, en franjas de dos horas y hora de Buenos
+Aires. Devuelve solo recuentos agregados, sin datos de socios, y requiere sesión
+de socio. No representa la ocupación actual ni incluye visitas sin check-in.
 
 | Recurso | Rutas |
 | --- | --- |
@@ -84,9 +101,11 @@ En producción, sirve la API únicamente mediante HTTPS o una red privada.
 | Planes | `GET /plans`, `GET /plans/:id`, `POST /plans`, `PUT /plans/:id`, `DELETE /plans/:id` |
 | Membresías | `GET /memberships`, `GET /memberships/:id`, `POST /memberships`, `PATCH /memberships/:id/status`, `DELETE /memberships/:id` |
 | Asistencias | `GET /attendances?memberId=:id`, `POST /attendances`, `PATCH /attendances/:id/checkout` |
-| Web pública | `GET /public/plans`, `POST /public/registrations/checkout`, `POST /public/registrations` |
-| App de socios | `POST /public/login`, `GET /public/me`, `POST /public/checkin-qr`, `GET /public/workouts`, `POST /public/workouts`, `GET /public/billing` |
+| Web pública | `GET /public/plans`, `POST /public/registrations/checkout`, `POST /public/registrations`, `POST /public/registrations/verify` |
+| App de socios | `POST /public/login`, `GET/PUT /public/me`, `PUT /public/me/photo`, `GET /public/members/:memberId/photo`, `POST /public/checkin-qr`, `GET /public/attendance-insights`, `GET/POST /public/workouts`, `GET /public/billing` |
+| Notificaciones de socios | `PUT/DELETE /notifications/push-token` (sesión de socio) |
 | Comunidad | `GET/PUT /community/profile`, `GET /community/members`, `GET /community/requests`, `POST/DELETE /community/requests/:memberId`, `POST /community/requests/:memberId/accept`, `GET /community/friends`, `DELETE /community/friends/:memberId`, `GET /community/blocks`, `POST/DELETE /community/blocks/:memberId`, `POST /community/reports/:memberId`, `GET/POST /community/messages/:memberId` |
+| Avisos | `POST /admin/notifications/promotional` (sesión administrativa) |
 | Check-in administrativo | `POST /admin/access-qr/check-in` (sesión administrativa) |
 | Moderación administrativa | `GET /admin/community/reports`, `PATCH /admin/community/reports/:id/status` (sesión administrativa) |
 
@@ -95,15 +114,39 @@ ocultos hasta que cada socio habilita su visibilidad y completa su nivel y
 objetivo. En búsquedas solo se comparte el nombre de pila, el nivel y el
 objetivo; nunca se exponen correo, teléfono ni domicilio. Solo se puede iniciar
 un chat cuando ambas personas aceptaron la amistad; bloquear corta el chat y
-elimina la amistad. Las denuncias quedan guardadas para revisión en el panel
+elimina la amistad. La foto de perfil solo se incluye cuando la persona decidió
+mostrar su perfil y se entrega mediante una ruta autenticada; los datos de foto
+no se incluyen en las respuestas JSON de socios. Las denuncias quedan guardadas para revisión en el panel
 administrativo. Los mensajes se consultan cada cuatro segundos mientras el chat
-está abierto; no se envían notificaciones cuando la app está cerrada.
+está abierto. Un mensaje nuevo también genera una notificación push sin mostrar
+el contenido del chat en la pantalla bloqueada. Los avisos promocionales se
+envían desde el panel web solo a socios activos que hayan habilitado
+notificaciones; el título y texto elegido por el gimnasio pueden aparecer en la
+pantalla bloqueada. Expo acepta como máximo 100 notificaciones por petición y
+los tokens que ya no están registrados se eliminan.
 
-El registro desde la app envía una contraseña junto con los datos de inscripción
-a `POST /api/public/registrations`. Gym back guarda la contraseña con scrypt,
-crea una solicitud pendiente y devuelve una sesión firmada. Para iniciar sesión,
-la app utiliza `POST /api/public/login`; `GET /api/public/me` valida la sesión.
-Las sesiones duran siete días y los intentos de inicio de sesión están limitados.
+Las notificaciones usan Expo Push Service. Configura `EXPO_ACCESS_TOKEN` en
+Gym back si habilitas la autenticación de la API de Expo (opcional), y aplica
+la migración de tokens antes de arrancar el backend. En la app configura el
+`projectId` de EAS y las credenciales push de APNs/FCM; el permiso se pide en
+el teléfono al iniciar sesión. Las notificaciones remotas requieren una
+compilación nativa de desarrollo o producción y un dispositivo físico; no se
+prueban en Expo Go ni en la versión web. Expo confirma que aceptó cada envío,
+pero esa aceptación no garantiza que el sistema operativo lo haya mostrado.
+
+El registro desde la app envía los datos de inscripción a
+`POST /api/public/registrations`; no envía ni almacena una contraseña en esta
+etapa. Gym back conserva temporalmente los datos necesarios, envía un enlace
+aleatorio de un solo uso y guarda únicamente el hash SHA-256 del token. El enlace
+vence en 24 horas. La persona elige su contraseña en el sitio al confirmar el
+correo; solo entonces se crea el socio y la solicitud pendiente. Las respuestas
+no revelan si una dirección ya está registrada. Para iniciar sesión, la app
+utiliza `POST /api/public/login`; `GET /api/public/me` valida la sesión. Las
+sesiones duran siete días y los intentos de inicio de sesión están limitados.
+Las rutas públicas de registro y checkout también limitan solicitudes por IP y
+por dirección de correo (10 y 2 solicitudes por hora, respectivamente) para
+reducir el abuso del envío de correos. Este contador reside en memoria: en un
+despliegue con varias instancias debe sustituirse por un limitador compartido.
 El nuevo campo `password_hash` es opcional para conservar los socios existentes;
 quienes no tengan una contraseña configurada no podrán iniciar sesión hasta que
 completen un flujo de alta con contraseña.
@@ -152,6 +195,18 @@ verificar un pago externo. Configura `MP_ACCESS_TOKEN`, `MP_WEBHOOK_SECRET` y
 `GYM_PUBLIC_URL`, y registra el endpoint de webhooks público HTTPS antes de
 habilitar el pago en línea. El prorrateo con el checkout sin plan asociado debe
 verificarse en sandbox antes de usar credenciales de producción.
+
+### Recetas fitness
+
+Los socios activos consultan las recetas publicadas con `GET /api/recipes`
+(filtros opcionales `?tag=volumen|definicion|rapido|vegetariano` y
+`?favorites=true`) y marcan favoritas con `PUT`/`DELETE
+/api/recipes/:id/favorite`; todo requiere sesión de socio. El panel
+administra las recetas con `GET|POST /api/admin/recipes` y
+`PUT|DELETE /api/admin/recipes/:id`. Aplica antes
+`migrations/20261015-create-recipes.sql`. La foto es opcional y debe ser una URL
+HTTPS. Usa recetas propias o con licencia; los valores nutricionales son
+orientativos.
 
 ### Ejemplos
 
@@ -221,6 +276,9 @@ Registrar una asistencia requiere un socio activo y una membresía vigente:
 - `MP_DEMO_MODE`: con valor `true`, permite probar el correo localmente con un enlace `.invalid` no funcional cuando las credenciales de Mercado Pago no están configuradas; no guarda registros y se desactiva automáticamente en producción.
 
 Configura estas variables en el `.env` del backend antes de aceptar solicitudes.
+Los errores de validación no devuelven los valores enviados por el cliente.
+El limitador de correo es local al proceso; no lo consideres una cuota global
+para SMTP si ejecutas varias instancias.
 La interfaz administrativa y la API deben servirse en el mismo sitio (por
 ejemplo, bajo el mismo dominio con un proxy HTTPS) para que la cookie `SameSite`
 del panel funcione. Si tienen orígenes distintos pero son del mismo sitio,

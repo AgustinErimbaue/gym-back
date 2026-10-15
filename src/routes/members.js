@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { body, param } from "express-validator";
+import { body, matchedData, param } from "express-validator";
 import { Member } from "../models/index.js";
 import { validateRequest } from "../middleware/validate.js";
 
@@ -43,7 +43,7 @@ router.post(
   validateRequest,
   async (req, res, next) => {
   try {
-    const member = await Member.create(req.body);
+    const member = await Member.create(matchedData(req, { locations: ["body"] }));
     res.status(201).json(member);
   } catch (error) {
     next(error);
@@ -55,7 +55,7 @@ router.put("/:id", param("id").isInt({ min: 1 }), memberFields, validateRequest,
   try {
     const member = await Member.findByPk(req.params.id);
     if (!member) return res.status(404).json({ error: "No se encontró el socio." });
-    await member.update(req.body);
+    await member.update(matchedData(req, { locations: ["body"] }));
     res.json(member);
   } catch (error) {
     next(error);

@@ -1,5 +1,6 @@
 import { promisify } from "node:util";
 import {
+  createHash,
   createHmac,
   randomBytes,
   scrypt as scryptCallback,
@@ -8,8 +9,19 @@ import {
 
 const scrypt = promisify(scryptCallback);
 const passwordBytes = 64;
+export const registrationVerificationLifetimeMs = 24 * 60 * 60 * 1000;
 const sessionDurationSeconds = 7 * 24 * 60 * 60;
 const dummyPasswordHash = `scrypt$0123456789abcdef0123456789abcdef$${"A".repeat(86)}`;
+
+export function createRegistrationVerificationToken() {
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  return { token, tokenHash };
+}
+
+export function hashRegistrationVerificationToken(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
 
 function sessionSecret() {
   const secret = process.env.MEMBER_SESSION_SECRET;

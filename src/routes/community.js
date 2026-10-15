@@ -11,6 +11,8 @@ import {
 } from "../models/index.js";
 import { requireMemberSession } from "../middleware/requireMemberSession.js";
 import { validateRequest } from "../middleware/validate.js";
+import { memberPhotoUrl } from "../services/memberProfilePhoto.js";
+import { sendPushToMember } from "../services/pushNotifications.js";
 
 const router = Router();
 const trainingLevels = ["Principiante", "Intermedio", "Experto"];
@@ -34,6 +36,7 @@ function publicMember(member, profile) {
   return {
     id: member.id,
     firstName: member.firstName,
+    profilePhotoUrl: profile?.isVisible ? memberPhotoUrl(member) : null,
     trainingLevel: profile?.isVisible ? profile.trainingLevel : null,
     goal: profile?.isVisible ? profile.goal : null,
   };
@@ -124,7 +127,7 @@ router.get(
       include: [{
         model: Member,
         required: true,
-        attributes: ["id", "firstName"],
+        attributes: ["id", "firstName", "profilePhotoUpdatedAt"],
         where: {
           status: "active",
           id: { [Op.ne]: req.member.id },
@@ -205,7 +208,7 @@ router.get(
     const members = otherIds.length
       ? await Member.findAll({
           where: { id: { [Op.in]: otherIds } },
-          attributes: ["id", "firstName"],
+          attributes: ["id", "firstName", "profilePhotoUpdatedAt"],
           include: [{
             model: CommunityProfile,
             attributes: ["isVisible", "trainingLevel", "goal"],
@@ -253,7 +256,7 @@ router.get(
     const members = friendIds.length
       ? await Member.findAll({
           where: { id: { [Op.in]: friendIds } },
-          attributes: ["id", "firstName"],
+          attributes: ["id", "firstName", "profilePhotoUpdatedAt"],
           include: [{
             model: CommunityProfile,
             attributes: ["isVisible", "trainingLevel", "goal"],
@@ -522,6 +525,20 @@ router.post(
       senderId: req.member.id,
       recipientId: friendId,
       body: req.body.body,
+    });
+    const sender = await Member.findByPk(req.member.id, {
+      attributes: ["firstName"],
+    });
+    void sendPushToMember(friendId, {
+      title: "Nuevo mensaje",
+      body: "Tienes un nuevo mensaje en la comunidad.",
+      data: {
+        type: "community-message",
+        memberId: req.member.id,
+        name: sender.firstName,
+      },
+    }).catch((error) => {
+      console.error("El mensaje se guardó, pero no se pudo enviar la notificación push:", error.message);
     });
     return res.status(201).json({
       message: {

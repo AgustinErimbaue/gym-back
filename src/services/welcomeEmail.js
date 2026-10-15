@@ -116,3 +116,51 @@ export async function sendRegistrationReceivedEmail({ member, plan, paymentUrl }
 
   await transporter.sendMail(buildRegistrationReceivedEmail({ member, plan, paymentUrl }));
 }
+
+export function buildRegistrationVerificationEmail({ member, verificationUrl }) {
+  const fullName = `${member.firstName} ${member.lastName}`;
+  const safeName = escapeHtml(fullName);
+  const safeUrl = escapeHtml(verificationUrl);
+  return {
+    from: process.env.SMTP_FROM,
+    to: member.email,
+    subject: "Confirma tu correo para continuar con tu inscripción en IRONCORE",
+    text: [
+      `Hola, ${fullName}.`,
+      "",
+      "Para confirmar que este correo te pertenece y continuar con tu inscripción, abre este enlace:",
+      verificationUrl,
+      "",
+      "El enlace vence en 24 horas y solo se puede usar una vez. Si no solicitaste esta inscripción, ignora este correo.",
+      "",
+      "El equipo de IRONCORE Gym Club",
+    ].join("\n"),
+    html: `
+      <main style="max-width:600px;margin:0 auto;padding:32px;color:#20242c;font-family:Arial,sans-serif;line-height:1.6">
+        <h1 style="color:#f07824">Confirma tu correo</h1>
+        <p>Hola ${safeName}, confirma que este correo te pertenece para continuar con tu inscripción.</p>
+        <p style="margin:28px 0">
+          <a href="${safeUrl}" style="display:inline-block;padding:14px 22px;border-radius:8px;background:#c6f36a;color:#10130f;font-weight:bold;text-decoration:none">
+            Confirmar correo y elegir contraseña
+          </a>
+        </p>
+        <p>El enlace vence en 24 horas y solo se puede usar una vez. Si no solicitaste esta inscripción, ignora este correo.</p>
+        <p>El equipo de IRONCORE Gym Club</p>
+      </main>
+    `,
+  };
+}
+
+export async function sendRegistrationVerificationEmail({ member, verificationUrl }) {
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT),
+    secure: process.env.SMTP_SECURE === "true",
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASSWORD,
+    },
+  });
+
+  await transporter.sendMail(buildRegistrationVerificationEmail({ member, verificationUrl }));
+}

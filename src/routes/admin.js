@@ -1,7 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Op } from "sequelize";
 import { Router } from "express";
-import { body, param, query } from "express-validator";
+import { body, matchedData, param, query } from "express-validator";
 import {
   Attendance,
   AccessPass,
@@ -11,9 +11,11 @@ import {
   Member,
   Membership,
   Plan,
+  Recipe,
   RegistrationRequest,
   sequelize,
 } from "../models/index.js";
+import { buildRecipeValues, recipeFields } from "../services/recipes.js";
 import { validateRequest } from "../middleware/validate.js";
 import {
   cancelMercadoPagoSubscription,
@@ -36,6 +38,7 @@ import {
   hashAccessPassToken,
   isAccessPassUsable,
 } from "../services/accessPass.js";
+import { sendPromotionalPush } from "../services/pushNotifications.js";
 
 const router = Router();
 const loginAttempts = new Map();
@@ -465,6 +468,28 @@ router.use((req, res, next) => {
   }
   return next();
 });
+
+router.post(
+  "/notifications/promotional",
+  [
+    body("title").trim().notEmpty().isLength({ max: 80 }),
+    body("body").trim().notEmpty().isLength({ max: 500 }),
+  ],
+  validateRequest,
+  async (req, res, next) => {
+    try {
+      const { title, body: message } = matchedData(req);
+      const result = await sendPromotionalPush({
+        title,
+        body: message,
+        data: { type: "promotion" },
+      });
+      return res.json(result);
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
 
 router.post(
   "/access-qr/check-in",
@@ -1181,7 +1206,7 @@ const planFields = [
 
 router.post("/", planFields, validateRequest, async (req, res, next) => {
   try {
-    const plan = await Plan.create(req.body);
+    const plan = await Plan.create(matchedData(req, { locations: ["body"] }));
     res.status(201).json(plan);
   } catch (error) {
     next(error);
@@ -1192,7 +1217,7 @@ router.put("/plans/:id", [param("id").isInt({ min: 1 }), ...planFields], validat
   try {
     const plan = await Plan.findByPk(req.params.id);
     if (!plan) return res.status(404).json({ error: "No se encontró el plan." });
-    await plan.update(req.body);
+    await plan.update(matchedData(req, { locations: ["body"] }));
     res.json(plan);
   } catch (error) {
     next(error);
@@ -1214,6 +1239,50 @@ router.patch(
     }
   },
 );
+
+router.get("/recipes", async (req, res, next) => {
+  try {
+    const recipes = await Recipe.findAll({ order: [["createdAt", "DESC"], ["id", "DESC"]], limit: 200 });
+    res.json(recipes);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/recipes", recipeFields, validateRequest, async (req, res, next) => {
+  try {
+    const recipe = await Recipe.create(buildRecipeValues(req.body));
+    res.status(201).json(recipe);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put(
+  "/recipes/:id",
+  [param("id").isInt({ min: 1 }), ...recipeFields],
+  validateRequest,
+  async (req, res, next) => {
+    try {
+      const recipe = await Recipe.findByPk(req.params.id);
+      if (!recipe) return res.status(404).json({ error: "No se encontró la receta." });
+      await recipe.update(buildRecipeValues(req.body));
+      return res.json(recipe);
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+router.delete("/recipes/:id", param("id").isInt({ min: 1 }), validateRequest, async (req, res, next) => {
+  try {
+    const deleted = await Recipe.destroy({ where: { id: req.params.id } });
+    if (!deleted) return res.status(404).json({ error: "No se encontró la receta." });
+    return res.status(204).end();
+  } catch (error) {
+    return next(error);
+  }
+});
 
 router.get(
   "/community/reports",

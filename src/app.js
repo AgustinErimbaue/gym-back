@@ -8,6 +8,8 @@ import plansRouter from "./routes/plans.js";
 import publicRouter from "./routes/public.js";
 import adminRouter from "./routes/admin.js";
 import communityRouter from "./routes/community.js";
+import notificationsRouter from "./routes/notifications.js";
+import recipesRouter from "./routes/recipes.js";
 import { errorHandler, notFound } from "./middleware/errorHandler.js";
 import { requireApiToken } from "./middleware/requireApiToken.js";
 
@@ -29,6 +31,8 @@ app.get("/api/health", (req, res) => {
 });
 app.use("/api/public", publicRouter);
 app.use("/api/community", communityRouter);
+app.use("/api/notifications", notificationsRouter);
+app.use("/api/recipes", recipesRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api", requireApiToken);
 app.use("/api/members", membersRouter);

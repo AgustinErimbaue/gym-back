@@ -1,20 +1,25 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { Op } from "sequelize";
+import { Op, QueryTypes } from "sequelize";
 import { body, param } from "express-validator";
-import { AccessPass, BillingPayment, BillingSubscription, Member, Membership, Plan, RegistrationRequest, Workout, sequelize } from "../models/index.js";
+import { AccessPass, BillingPayment, BillingSubscription, CommunityBlock, CommunityProfile, Member, Membership, PendingMemberRegistration, Plan, RegistrationRequest, Workout, sequelize } from "../models/index.js";
 import { validateRequest } from "../middleware/validate.js";
 import { requireMemberSession } from "../middleware/requireMemberSession.js";
 import { loginRateLimit } from "../middleware/loginRateLimit.js";
+import { registrationRateLimit } from "../middleware/registrationRateLimit.js";
 import {
   createMemberSession,
+  createRegistrationVerificationToken,
   hashPassword,
+  hashRegistrationVerificationToken,
+  registrationVerificationLifetimeMs,
   verifyPasswordOrDummy,
 } from "../services/memberAuth.js";
 import {
   isEmailConfigured,
   isReservedEmailAddress,
   sendRegistrationReceivedEmail,
+  sendRegistrationVerificationEmail,
 } from "../services/welcomeEmail.js";
 import {
   createSubscriptionAuthorization,
@@ -27,6 +32,7 @@ import {
   createAccessPassToken,
   hashAccessPassToken,
 } from "../services/accessPass.js";
+import { decodeMemberProfilePhoto, memberPhotoUrl } from "../services/memberProfilePhoto.js";
 
 const router = Router();
 
@@ -43,6 +49,9 @@ async function memberSummary(member) {
     lastName: member.lastName,
     email: member.email,
     status: member.status,
+    phone: member.phone ?? "",
+    address: member.address ?? "",
+    profilePhotoUrl: memberPhotoUrl(member),
     membership: membership
       ? { planName: membership.Plan.name, endDate: membership.endDate }
       : null,
@@ -68,7 +77,10 @@ async function sendRegistrationEmailResult(member, plan, paymentUrl) {
     await sendRegistrationReceivedEmail({ member, plan, paymentUrl });
     return { emailSent: true };
   } catch (emailError) {
-    console.error("La inscripción se guardó, pero no se pudo enviar el correo de confirmación:", emailError);
+    console.error(
+      "La inscripción se guardó, pero no se pudo enviar el correo de confirmación:",
+      emailError.code ?? emailError.name,
+    );
     return {
       emailSent: false,
       emailWarning: "No pudimos enviar el correo de confirmación. Revisa tu dirección o contacta al gimnasio.",
@@ -153,7 +165,7 @@ router.post(
     try {
       const member = await Member.unscoped().findOne({
         where: { email: req.body.email },
-        attributes: ["id", "firstName", "lastName", "email", "status", "passwordHash"],
+        attributes: ["id", "firstName", "lastName", "email", "status", "passwordHash", "profilePhotoUpdatedAt"],
       });
       const passwordMatches = await verifyPasswordOrDummy(
         req.body.password,
@@ -188,6 +200,106 @@ router.get("/me", requireMemberSession, async (req, res, next) => {
   }
 });
 
+router.put(
+  "/me",
+  [
+    body("firstName").trim().notEmpty().isLength({ max: 80 }),
+    body("lastName").trim().notEmpty().isLength({ max: 80 }),
+    body("phone").isString().trim().isLength({ max: 30 }),
+    body("address").isString().trim().isLength({ max: 200 }),
+  ],
+  validateRequest,
+  requireMemberSession,
+  async (req, res, next) => {
+    try {
+      const member = await Member.findByPk(req.member.id);
+      if (!member) {
+        return res.status(401).json({ error: "La cuenta ya no está disponible. Inicia sesión nuevamente." });
+      }
+      await member.update({
+        firstName: req.body.firstName,
+        lastName: req.body.lastName,
+        phone: req.body.phone,
+        address: req.body.address,
+      });
+      return res.json({ member: await memberSummary(member) });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+router.put(
+  "/me/photo",
+  [
+    body("photoData")
+      .custom((value) => decodeMemberProfilePhoto(value) !== null)
+      .withMessage("La foto debe ser un archivo JPEG válido de hasta 350 KB."),
+  ],
+  validateRequest,
+  requireMemberSession,
+  async (req, res, next) => {
+    try {
+      const member = await Member.findByPk(req.member.id);
+      if (!member) {
+        return res.status(401).json({ error: "La cuenta ya no está disponible. Inicia sesión nuevamente." });
+      }
+      await member.update({
+        profilePhotoData: req.body.photoData.slice("data:image/jpeg;base64,".length),
+        profilePhotoUpdatedAt: new Date(),
+      });
+      return res.json({ member: await memberSummary(member) });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+router.get(
+  "/members/:memberId/photo",
+  [param("memberId").isInt({ min: 1 }).toInt()],
+  validateRequest,
+  requireMemberSession,
+  async (req, res, next) => {
+    try {
+      const member = await Member.unscoped().findByPk(req.params.memberId, {
+        attributes: ["id", "status", "profilePhotoData"],
+      });
+      if (!member?.profilePhotoData) {
+        return res.status(404).json({ error: "La foto de perfil no está disponible." });
+      }
+
+      if (member.id !== req.member.id) {
+        const [viewer, profile, block] = await Promise.all([
+          Member.findByPk(req.member.id, { attributes: ["id", "status"] }),
+          CommunityProfile.findByPk(member.id, { attributes: ["isVisible"] }),
+          CommunityBlock.findOne({
+            where: {
+              [Op.or]: [
+                { blockedBy: req.member.id, blockedMemberId: member.id },
+                { blockedBy: member.id, blockedMemberId: req.member.id },
+              ],
+            },
+            attributes: ["id"],
+          }),
+        ]);
+        if (viewer?.status !== "active" || member.status !== "active" || !profile?.isVisible || block) {
+          return res.status(404).json({ error: "La foto de perfil no está disponible." });
+        }
+      }
+
+      res.set({
+        "Cache-Control": "private, no-store",
+        "Content-Type": "image/jpeg",
+        "X-Content-Type-Options": "nosniff",
+      });
+      return res.send(Buffer.from(member.profilePhotoData, "base64"));
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
 router.get("/workouts", requireMemberSession, async (req, res, next) => {
   try {
     const workouts = await Workout.findAll({
@@ -197,6 +309,32 @@ router.get("/workouts", requireMemberSession, async (req, res, next) => {
       limit: 20,
     });
     return res.json({ workouts });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/attendance-insights", requireMemberSession, async (req, res, next) => {
+  try {
+    const slots = await sequelize.query(
+      `
+        SELECT
+          EXTRACT(ISODOW FROM (checked_in_at AT TIME ZONE 'America/Argentina/Buenos_Aires'))::INTEGER - 1 AS day,
+          FLOOR(EXTRACT(HOUR FROM (checked_in_at AT TIME ZONE 'America/Argentina/Buenos_Aires')) / 2)::INTEGER AS period,
+          COUNT(*)::INTEGER AS visits
+        FROM gym."Attendance"
+        WHERE checked_in_at >= (
+          date_trunc('week', NOW() AT TIME ZONE 'America/Argentina/Buenos_Aires') - INTERVAL '4 weeks'
+        ) AT TIME ZONE 'America/Argentina/Buenos_Aires'
+          AND checked_in_at < (
+            date_trunc('week', NOW() AT TIME ZONE 'America/Argentina/Buenos_Aires')
+          ) AT TIME ZONE 'America/Argentina/Buenos_Aires'
+        GROUP BY day, period
+        ORDER BY day, period
+      `,
+      { type: QueryTypes.SELECT },
+    );
+    return res.json({ completeWeeks: 4, periodHours: 2, slots });
   } catch (error) {
     return next(error);
   }
@@ -303,6 +441,7 @@ router.post(
     body("planId").isInt({ min: 1 }),
   ],
   validateRequest,
+  registrationRateLimit,
   async (req, res, next) => {
     try {
       const demoMode = isPaymentDemoMode();
@@ -436,75 +575,184 @@ router.post(
     body("dni").trim().matches(/^\d{7,8}$/),
     body("address").trim().notEmpty().isLength({ max: 200 }),
     body("phone").optional({ nullable: true }).isString().isLength({ max: 30 }),
-    body("password").optional().isString().isLength({ min: 8, max: 128 }),
     body("planId").isInt({ min: 1 }),
   ],
   validateRequest,
+  registrationRateLimit,
   async (req, res, next) => {
     try {
-      const passwordHash = req.body.password
-        ? await hashPassword(req.body.password)
-        : null;
-      const emailConfigured = isEmailConfigured();
-      if (!emailConfigured && !passwordHash) {
+      if (!isEmailConfigured() || isReservedEmailAddress(req.body.email)) {
         return res.status(503).json({
-          error: "El envío de correos no está configurado. Contacta al gimnasio.",
+          error: "No se pudo iniciar la verificación por correo. Contacta al gimnasio.",
         });
       }
 
-      const registration = await sequelize.transaction(async (transaction) => {
+      let verificationUrl;
+      try {
+        verificationUrl = new URL(process.env.GYM_PUBLIC_URL);
+      } catch {
+        return res.status(503).json({
+          error: "No se pudo iniciar la verificación por correo. Contacta al gimnasio.",
+        });
+      }
+      if (
+        !["http:", "https:"].includes(verificationUrl.protocol) ||
+        (process.env.NODE_ENV === "production" && verificationUrl.protocol !== "https:")
+      ) {
+        return res.status(503).json({
+          error: "No se pudo iniciar la verificación por correo. Contacta al gimnasio.",
+        });
+      }
+
+      const { token, tokenHash } = createRegistrationVerificationToken();
+      const pendingResult = await sequelize.transaction(async (transaction) => {
+        await PendingMemberRegistration.destroy({
+          where: { expiresAt: { [Op.lte]: new Date() } },
+          transaction,
+        });
+
         const plan = await Plan.findOne({
           where: { id: req.body.planId, isActive: true },
           transaction,
         });
-        if (!plan) return null;
+        if (!plan) return { notFound: true };
 
-        const member = await Member.create(
+        const existingMember = await Member.unscoped().findOne({
+          where: { [Op.or]: [{ email: req.body.email }, { dni: req.body.dni }] },
+          attributes: ["id"],
+          transaction,
+        });
+        if (existingMember) return { accepted: true };
+
+        const existingPending = await PendingMemberRegistration.findOne({
+          where: { email: req.body.email },
+          transaction,
+        });
+        if (existingPending) return { accepted: true };
+
+        const pending = await PendingMemberRegistration.create(
           {
             firstName: req.body.firstName,
             lastName: req.body.lastName,
             email: req.body.email,
-            passwordHash,
             dni: req.body.dni,
             address: req.body.address,
             phone: req.body.phone ?? null,
+            planId: plan.id,
+            tokenHash,
+            expiresAt: new Date(Date.now() + registrationVerificationLifetimeMs),
+          },
+          { transaction },
+        );
+        return { pending, plan };
+      });
+
+      if (pendingResult.notFound) {
+        return res.status(404).json({ error: "No se encontró un plan activo." });
+      }
+      if (pendingResult.accepted) {
+        return res.status(202).json({ accepted: true });
+      }
+
+      verificationUrl.search = "";
+      verificationUrl.hash = `verify-registration=${token}`;
+      try {
+        await sendRegistrationVerificationEmail({
+          member: pendingResult.pending,
+          verificationUrl: verificationUrl.toString(),
+        });
+      } catch (emailError) {
+        await pendingResult.pending.destroy();
+        console.error(
+          "No se pudo enviar el correo de verificación:",
+          emailError.code ?? emailError.name,
+        );
+        return res.status(503).json({
+          error: "No se pudo enviar el correo de verificación. Intenta nuevamente más tarde.",
+        });
+      }
+
+      return res.status(202).json({ accepted: true });
+    } catch (error) {
+      if (error.name === "SequelizeUniqueConstraintError") {
+        return res.status(202).json({ accepted: true });
+      }
+      return next(error);
+    }
+  },
+);
+
+router.post(
+  "/registrations/verify",
+  [
+    body("token").isString().matches(/^[A-Za-z0-9_-]{43}$/),
+    body("password").isString().isLength({ min: 8, max: 128 }),
+  ],
+  validateRequest,
+  loginRateLimit,
+  async (req, res, next) => {
+    try {
+      const tokenHash = hashRegistrationVerificationToken(req.body.token);
+      const pending = await PendingMemberRegistration.findOne({
+        where: {
+          tokenHash,
+          expiresAt: { [Op.gt]: new Date() },
+        },
+        attributes: ["id"],
+      });
+      if (!pending) {
+        return res.status(400).json({
+          error: "El enlace de verificación no es válido o venció. Inicia nuevamente la inscripción.",
+        });
+      }
+
+      const passwordHash = await hashPassword(req.body.password);
+      const verified = await sequelize.transaction(async (transaction) => {
+        const lockedPending = await PendingMemberRegistration.findOne({
+          where: {
+            id: pending.id,
+            tokenHash,
+            expiresAt: { [Op.gt]: new Date() },
+          },
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
+        if (!lockedPending) return false;
+
+        const member = await Member.create(
+          {
+            firstName: lockedPending.firstName,
+            lastName: lockedPending.lastName,
+            email: lockedPending.email,
+            passwordHash,
+            dni: lockedPending.dni,
+            address: lockedPending.address,
+            phone: lockedPending.phone,
             status: "inactive",
           },
           { transaction },
         );
-        const registrationRequest = await RegistrationRequest.create(
-          { memberId: member.id, planId: plan.id },
+        await RegistrationRequest.create(
+          { memberId: member.id, planId: lockedPending.planId },
           { transaction },
         );
-
-        return { member, plan, registrationRequest };
+        await lockedPending.destroy({ transaction });
+        return true;
       });
 
-      if (!registration) {
-        return res.status(404).json({ error: "No se encontró un plan activo." });
-      }
-
-      const emailResult = await sendRegistrationEmailResult(
-        registration.member,
-        registration.plan,
-      );
-
-      const response = {
-        requestId: registration.registrationRequest.id,
-        ...emailResult,
-      };
-
-      if (passwordHash) {
-        const session = createMemberSession(registration.member.id);
-        return res.status(201).json({
-          ...session,
-          ...response,
-          member: await memberSummary(registration.member),
+      if (!verified) {
+        return res.status(400).json({
+          error: "El enlace de verificación no es válido o venció. Inicia nuevamente la inscripción.",
         });
       }
 
-      return res.status(201).json(response);
+      return res.json({ verified: true });
     } catch (error) {
+      if (error.name === "SequelizeUniqueConstraintError") {
+        return res.status(400).json({
+          error: "No se pudo completar la inscripción. Contacta al gimnasio para recibir ayuda.",
+        });
+      }
       return next(error);
     }
   },
